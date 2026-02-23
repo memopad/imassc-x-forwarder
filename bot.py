@@ -1,21 +1,16 @@
 import os
 import json
 import requests
+import feedparser
 from typing import Optional, Dict, List, Tuple
 
-# =========================
-# 1) 계정별 "스레드(포럼 포스트) ID"를 여기 채우기
-#    - 너가 준 링크에서 /channels/서버ID/스레드ID 이 중 '스레드ID'가 thread_id임
-# =========================
+# ====== 계정별 스레드(포럼 포스트) ID ======
 THREAD_IDS = {
-    "imassc_official": "1452221967544619101",   # <- 여기 (이미 알고 있는 값)
-    "kadokawa_sk":     "1475459223709286410",  # <- 여기에 kadokawa용 스레드ID 넣기
+    "imassc_official": "1452221967544619101",
+    "kadokawa_sk": "1475459223709286410",
 }
 
-# =========================
-# 2) 계정별 RSS 소스 후보들
-#    (인스턴스마다 막히는 게 달라서 여러 개 둠)
-# =========================
+# ====== 계정별 RSS 소스 후보 ======
 SOURCES: Dict[str, List[str]] = {
     "imassc_official": [
         "https://nitter.net/imassc_official/rss",
@@ -29,32 +24,19 @@ SOURCES: Dict[str, List[str]] = {
     ],
 }
 
-# =========================
-# 3) 계정별 웹훅 (GitHub Secrets)
-# =========================
-WEBHOOKS = {
-    "imassc_official": os.environ["DISCORD_WEBHOOK_URL"],
-    "kadokawa_sk": os.environ["DISCORD_WEBHOOK_KADOKAWA"],
+# ====== 계정별 웹훅 env 이름 (너가 말한 것처럼 imassc는 DISCORD_WEBHOOK_URL 유지) ======
+WEBHOOK_ENV = {
+    "imassc_official": "DISCORD_WEBHOOK_URL",
+    "kadokawa_sk": "DISCORD_WEBHOOK_KADOKAWA",
 }
 
-# =========================
-# 4) 중복 방지 상태 파일
-#    계정별 last_link 저장
-# =========================
 STATE_FILE = "state.json"
 
-UA = "Mozilla/5.0 (compatible; x-forwarder/2.0; +https://github.com/)"
+UA = "Mozilla/5.0 (compatible; x-forwarder/3.0; +https://github.com/)"
 ACCEPT = "application/rss+xml, application/xml;q=0.9, */*;q=0.8"
 
 
 def load_state() -> Dict[str, str]:
-    """
-    state.json 예시:
-    {
-      "imassc_official": "https://x.com/.../status/...",
-      "kadokawa_sk": "https://x.com/.../status/..."
-    }
-    """
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -68,43 +50,8 @@ def save_state(state: Dict[str, str]) -> None:
         json.dump(state, f, ensure_ascii=False)
 
 
-def fetch_latest_link_from_rss(url: str) -> Optional[str]:
-    r = requests.get(
-        url,
-        headers={"User-Agent": UA, "Accept": ACCEPT},
-        timeout=20,
-    )
-    if r.status_code != 200:
-        print(f"Fetch failed: {url} -> {r.status_code}")
-        return None
-
-    text = r.text
-
-    # 단순 파싱: <link>...</link> 중 /status/ 포함 링크 찾기
-    start = 0
-    links: List[str] = []
-    while True:
-        a = text.find("<link>", start)
-        if a == -1:
-            break
-        b = text.find("</link>", a)
-        if b == -1:
-            break
-        link = text[a + 6 : b].strip()
-        links.append(link)
-        start = b + 7
-
-    for link in links:
-        if "/status/" in link:
-            return link
-    return None
-
-
 def normalize_to_xdotcom(link: str) -> str:
-    # 앵커 제거 (#m 등)
     link = link.split("#")[0]
-
-    # nitter/xcancel 등을 x.com으로 치환
     replacements: List[Tuple[str, str]] = [
         ("https://nitter.net/", "https://x.com/"),
         ("https://xcancel.com/", "https://x.com/"),
@@ -119,29 +66,57 @@ def normalize_to_xdotcom(link: str) -> str:
     return link
 
 
+def fetch_latest_link_from_rss(url: str) -> Optional[str]:
+    r = requests.get(url, headers={"User-Agent": UA, "Accept": ACCEPT}, timeout=20)
+    if r.status_code != 200:
+        print(f"Fetch failed: {url} -> {r.status_code}")
+        return None
+
+    feed = feedparser.parse(r.text)
+    if not feed.entries:
+        print(f"No entries: {url}")
+        return None
+
+    # 첫 엔트리가 최신인 게 보통
+    link = feed.entries[0].get("link")
+    if not link:
+        return None
+
+    # 혹시 첫 엔트리가 status가 아니면 status가 나올 때까지 조금 훑음
+    if "/status/" not in link:
+        for e in feed.entries[:5]:
+            l = e.get("link")
+            if l and "/status/" in l:
+                link = l
+                break
+
+    if "/status/" not in link:
+        return None
+
+    return link
+
+
 def post_to_discord_thread(webhook_url: str, thread_id: str, content: str) -> None:
     url = f"{webhook_url}?thread_id={thread_id}"
-    payload = {"content": content}
-    resp = requests.post(url, json=payload, timeout=20)
+    resp = requests.post(url, json={"content": content}, timeout=20)
     resp.raise_for_status()
 
 
 def process_account(account: str, state: Dict[str, str]) -> None:
-    # thread_id / webhook 확인
     thread_id = THREAD_IDS.get(account)
-    webhook = WEBHOOKS.get(account)
-
-    if not thread_id or "PUT_" in thread_id:
-        print(f"[{account}] thread_id not set. Skipping.")
+    if not thread_id:
+        print(f"[{account}] thread_id missing. Skipping.")
         return
+
+    env_name = WEBHOOK_ENV.get(account)
+    webhook = os.getenv(env_name) if env_name else None
     if not webhook:
-        print(f"[{account}] webhook not set. Skipping.")
+        print(f"[{account}] webhook env missing ({env_name}). Skipping.")
         return
 
     latest_link = None
     used_source = None
 
-    # 여러 RSS 소스 중 되는 것 하나를 사용
     for src in SOURCES.get(account, []):
         try:
             link = fetch_latest_link_from_rss(src)
@@ -156,29 +131,34 @@ def process_account(account: str, state: Dict[str, str]) -> None:
         print(f"[{account}] Could not fetch latest tweet from any source.")
         return
 
-    # 중복 방지 (계정별)
+    # ✅ 디버그 로그: 뭐를 최신이라고 보고 있는지
+    print(f"[{account}] latest from rss: {latest_link}")
+    print(f"[{account}] last in state:   {state.get(account)}")
+    print(f"[{account}] source:          {used_source}")
+
     if state.get(account) == latest_link:
         print(f"[{account}] No new tweet.")
         return
 
-    msg = f"{account} 최신 트윗:\n{latest_link}"
+    msg = f"최신 트윗:\n{latest_link}"
     post_to_discord_thread(webhook, thread_id, msg)
 
     state[account] = latest_link
-    print(f"[{account}] Posted: {latest_link}")
-    print(f"[{account}] Source: {used_source}")
+    print(f"[{account}] Posted!")
 
 
-def main() -> None:
+def main():
     state = load_state()
 
-    # 계정 2개 처리
     for account in ["imassc_official", "kadokawa_sk"]:
         process_account(account, state)
+
+    # 잔재 키 제거(있어도 되지만 깔끔하게)
+    if "last_link" in state:
+        del state["last_link"]
 
     save_state(state)
 
 
 if __name__ == "__main__":
     main()
-# schedule test
