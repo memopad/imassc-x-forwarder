@@ -1,0 +1,35 @@
+name: Forward latest tweet to Discord forum thread
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # state.json을 매번 유지하려고 캐시 사용
+      - name: Restore state cache
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: state-${{ github.repository }}
+          restore-keys: |
+            state-
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: Run forwarder
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python bot.py
+
+      - name: Save state cache
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: state-${{ github.repository }}
