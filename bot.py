@@ -9,7 +9,7 @@ from typing import Optional, Dict, List, Tuple
 # =========================
 THREAD_IDS = {
     "imassc_official": "1452221967544619101",   # <- 여기 (이미 알고 있는 값)
-    "kadokawa_sk":     "1475459357847322635",  # <- 여기에 kadokawa용 스레드ID 넣기
+    "kadokawa_sk":     "1475459223709286410",  # <- 여기에 kadokawa용 스레드ID 넣기
 }
 
 # =========================
