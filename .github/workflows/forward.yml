@@ -3,6 +3,10 @@ name: Forward latest tweet to Discord forum thread
 on:
   workflow_dispatch:
 
+concurrency:
+  group: x-forwarder
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
