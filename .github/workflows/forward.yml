@@ -26,6 +26,7 @@ jobs:
       - name: Run forwarder
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_KADOKAWA: ${{ secrets.DISCORD_WEBHOOK_KADOKAWA }}
         run: python bot.py
 
       - name: Save state cache
