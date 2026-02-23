@@ -33,7 +33,7 @@ SOURCES: Dict[str, List[str]] = {
 # 3) 계정별 웹훅 (GitHub Secrets)
 # =========================
 WEBHOOKS = {
-    "imassc_official": os.environ["DISCORD_WEBHOOK_IMASSC"],
+    "imassc_official": os.environ["DISCORD_WEBHOOK_URL"],
     "kadokawa_sk": os.environ["DISCORD_WEBHOOK_KADOKAWA"],
 }
 
