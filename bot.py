@@ -66,34 +66,21 @@ def normalize_to_xdotcom(link: str) -> str:
     return link
 
 
-def fetch_latest_link_from_rss(url: str) -> Optional[str]:
+def fetch_recent_status_links(url: str, limit: int = 10) -> List[str]:
     r = requests.get(url, headers={"User-Agent": UA, "Accept": ACCEPT}, timeout=20)
     if r.status_code != 200:
         print(f"Fetch failed: {url} -> {r.status_code}")
-        return None
+        return []
 
     feed = feedparser.parse(r.text)
-    if not feed.entries:
-        print(f"No entries: {url}")
-        return None
-
-    # 첫 엔트리가 최신인 게 보통
-    link = feed.entries[0].get("link")
-    if not link:
-        return None
-
-    # 혹시 첫 엔트리가 status가 아니면 status가 나올 때까지 조금 훑음
-    if "/status/" not in link:
-        for e in feed.entries[:5]:
-            l = e.get("link")
-            if l and "/status/" in l:
-                link = l
-                break
-
-    if "/status/" not in link:
-        return None
-
-    return link
+    links: List[str] = []
+    for e in feed.entries[:limit]:
+        l = e.get("link")
+        if not l:
+            continue
+        if "/status/" in l:
+            links.append(l)
+    return links
 
 
 def post_to_discord_thread(webhook_url: str, thread_id: str, content: str) -> None:
@@ -117,34 +104,48 @@ def process_account(account: str, state: Dict[str, str]) -> None:
     latest_link = None
     used_source = None
 
+    recent = []
     for src in SOURCES.get(account, []):
         try:
-            link = fetch_latest_link_from_rss(src)
-            if link:
-                latest_link = normalize_to_xdotcom(link)
+            links = fetch_recent_status_links(src, limit=10)
+            if links:
+                # x.com으로 정규화
+                recent = [normalize_to_xdotcom(x) for x in links]
                 used_source = src
                 break
         except Exception as e:
             print(f"[{account}] Error reading {src}: {e}")
 
-    if not latest_link:
-        print(f"[{account}] Could not fetch latest tweet from any source.")
+    if not recent:
+        print(f"[{account}] Could not fetch tweets from any source.")
         return
 
-    # ✅ 디버그 로그: 뭐를 최신이라고 보고 있는지
-    print(f"[{account}] latest from rss: {latest_link}")
-    print(f"[{account}] last in state:   {state.get(account)}")
-    print(f"[{account}] source:          {used_source}")
+    last = state.get(account)
 
-    if state.get(account) == latest_link:
+    print(f"[{account}] recent[0]:        {recent[0]}")
+    print(f"[{account}] last in state:    {last}")
+    print(f"[{account}] source:           {used_source}")
+
+    # last가 목록에 있으면, 그 앞(=더 최신) 것들만 전송 대상
+    if last in recent:
+        idx = recent.index(last)
+        to_post = recent[:idx]
+    else:
+        # state가 없거나(처음) RSS가 리셋되었으면 최신 1개만(스팸 방지)
+        to_post = recent[:1]
+
+    # 최신 -> 과거 순으로 되어있으니, 게시할 땐 오래된 것부터 올려 순서 유지
+    to_post = list(reversed(to_post))
+
+    if not to_post:
         print(f"[{account}] No new tweet.")
         return
 
-    msg = f"최신 트윗:\n{latest_link}"
-    post_to_discord_thread(webhook, thread_id, msg)
-
-    state[account] = latest_link
-    print(f"[{account}] Posted!")
+    for link in to_post:
+        msg = f"최신 트윗:\n{link}"
+        post_to_discord_thread(webhook, thread_id, msg)
+        state[account] = link
+        print(f"[{account}] Posted: {link}")
 
 
 def main():
