@@ -1,24 +1,18 @@
 name: Forward latest tweet to Discord forum thread
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
-
-      # state.json을 매번 유지하려고 캐시 사용
-      - name: Restore state cache
-        uses: actions/cache@v4
         with:
-          path: state.json
-          key: state-${{ github.repository }}
-          restore-keys: |
-            state-
+          persist-credentials: true
 
       - name: Install deps
         run: pip install requests
@@ -29,8 +23,23 @@ jobs:
           DISCORD_WEBHOOK_KADOKAWA: ${{ secrets.DISCORD_WEBHOOK_KADOKAWA }}
         run: python bot.py
 
-      - name: Save state cache
-        uses: actions/cache@v4
-        with:
-          path: state.json
-          key: state-${{ github.repository }}
+      - name: Commit updated state.json (if changed)
+        run: |
+          if [ ! -f state.json ]; then
+            echo "state.json not found, skipping commit"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add state.json
+
+          # 변경 없으면 커밋하지 않음
+          if git diff --cached --quiet; then
+            echo "No state changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update state"
+          git push
